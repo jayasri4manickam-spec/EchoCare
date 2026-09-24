@@ -1,3 +1,4 @@
+import { api } from './api.js';
 import { getMedications, getPatientProfile, addTelemetryLog, updateMedicationStatus } from './storage.js';
 import { speak } from './voiceEngine.js';
 import { playChime } from './speechTTS.js';
@@ -202,14 +203,10 @@ export const evaluateScheduledReminders = () => {
 
       // Dispatch alert via backend notification engine
       try {
-        fetch('http://localhost:5001/api/notifications/test-alert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            patientId: profile.id || 'pat-1',
-            eventType: 'MEDICATION_OVERDUE_3_MISSED',
-            message: `EchoCare Alert: Scheduled medication ${med.name} (${med.dosage}) missed 3 voice reminders. Caregiver attention required.`,
-          }),
+        api.testAlert({
+          patientId: profile.id || 'pat-1',
+          eventType: 'MEDICATION_OVERDUE_3_MISSED',
+          message: `EchoCare Alert: Scheduled medication ${med.name} (${med.dosage}) missed 3 voice reminders. Caregiver attention required.`,
         }).catch((e) => console.warn('Backend notification dispatch error:', e));
       } catch (e) {}
     }

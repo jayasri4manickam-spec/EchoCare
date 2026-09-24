@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Wrench, Volume2, Clock, CheckCircle2, RefreshCw, X, ShieldAlert, Bug, Info } from 'lucide-react';
 import { getAvailableVoices, speak, getVoiceState } from '../../services/voiceEngine';
-import { unlockBrowserAudio } from '../../services/speechTTS';
+import { unlockBrowserAudio, playChime } from '../../services/speechTTS';
 import { useLanguage } from '../../data/LanguageContext';
 import { api } from '../../services/api';
+import { addMedication as addLocalMedication } from '../../services/storage';
 
 export const DevTestPanel = ({ isOpen, onClose }) => {
   const [voices, setVoices] = useState([]);
@@ -49,12 +50,19 @@ export const DevTestPanel = ({ isOpen, onClose }) => {
   const handleCreateTestMed = async (minutesFromNow) => {
     setLoading(true);
     const target = new Date(Date.now() + minutesFromNow * 60 * 1000);
-    const timeStr = target.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    let hours = target.getHours();
+    const minutes = String(target.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const timeStr = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+    const medName = `Test Med (+${minutesFromNow}m)`;
 
     try {
+      // 1. Post to backend SQLite DB
       const res = await api.addMedication({
         patient_id: 'pat-1',
-        name: `Test Med (+${minutesFromNow}m)`,
+        name: medName,
         dosage: '100',
         unit: 'mg',
         instructions: `Take immediately when prompted (+${minutesFromNow}m test)`,
@@ -66,12 +74,31 @@ export const DevTestPanel = ({ isOpen, onClose }) => {
         escalation_delay: 1,
       });
 
-      if (res && res.success) {
-        setTestResultMsg(`✅ Test med created for ${timeStr}! Scheduler will trigger spoken reminder.`);
-        fetchDiagnostics();
-      } else {
-        setTestResultMsg(`⚠️ Failed creating test med`);
+      // 2. Save to local storage for frontend browser voice reminder engine ticker
+      addLocalMedication({
+        id: (res && res.medication && res.medication.id) || `med-test-${Date.now()}`,
+        name: medName,
+        dosage: '100',
+        unit: 'mg',
+        instructions: `Take immediately when prompted (+${minutesFromNow}m test)`,
+        scheduledTime: timeStr,
+        scheduled_time: timeStr,
+        frequency: 'Daily',
+        status: 'Pending',
+        reminder1Interval: 0,
+        reminder2Interval: 1,
+        reminder3Interval: 1,
+        escalationDelay: 1,
+      });
+
+      // 3. Unlock browser audio hardware
+      unlockBrowserAudio();
+
+      setTestResultMsg(`✅ Scheduled for ${timeStr} (+${minutesFromNow}m)! Spoken voice reminder will trigger at ${timeStr}.`);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('echocare-medication-updated'));
       }
+      fetchDiagnostics();
     } catch (e) {
       setTestResultMsg(`Error: ${e.message}`);
     } finally {
@@ -81,17 +108,73 @@ export const DevTestPanel = ({ isOpen, onClose }) => {
 
   const handleTriggerTestSimulation = async () => {
     setLoading(true);
-    try {
-      const res = await api.runTestSimulation('pat-1', 'Metformin 500mg');
-      if (res && res.success) {
-        setTestResultMsg('⚡ 3-Stage Reminder Simulation Triggered!');
-        fetchDiagnostics();
-      }
-    } catch (e) {
-      setTestResultMsg(`Simulation error: ${e.message}`);
-    } finally {
-      setLoading(false);
+    unlockBrowserAudio();
+
+    const dummyMed = {
+      id: 'med-sim-' + Date.now(),
+      name: 'Metformin',
+      dosage: '500',
+      unit: 'mg',
+      instructions: 'Take 1 tablet with breakfast water',
+    };
+
+    // Stage 1 (t = 0s) - Browser Audio & Voice Prompt
+    playChime('warning');
+    const stage1Prompt = 'Amma, it is time for your Metformin 500mg. Please take it now with water.';
+    speak(stage1Prompt, language);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('echocare-medication-reminder', {
+          detail: { medication: dummyMed, stage: 1, prompt: stage1Prompt },
+        })
+      );
     }
+    setTestResultMsg('🔊 Stage 1: Proactive voice reminder speaking now out loud in browser...');
+
+    // Stage 2 (t = 3.5s) - Browser Gentle Reminder
+    setTimeout(() => {
+      playChime('warning');
+      const stage2Prompt = 'Gentle reminder for your Metformin 500mg. Please take it when you can.';
+      speak(stage2Prompt, language);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('echocare-medication-reminder', {
+            detail: { medication: dummyMed, stage: 2, prompt: stage2Prompt },
+          })
+        );
+      }
+      setTestResultMsg('🔊 Stage 2: Gentle voice reminder speaking now out loud in browser...');
+    }, 3500);
+
+    // Stage 3 (t = 7s) - Browser Urgent Reminder
+    setTimeout(() => {
+      playChime('warning');
+      const stage3Prompt = 'Urgent reminder: Please take your Metformin 500mg now.';
+      speak(stage3Prompt, language);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('echocare-medication-reminder', {
+            detail: { medication: dummyMed, stage: 3, prompt: stage3Prompt },
+          })
+        );
+      }
+      setTestResultMsg('🔊 Stage 3: Urgent voice reminder speaking now out loud in browser...');
+    }, 7000);
+
+    // Stage 4 (t = 10.5s) - Caregiver Server Escalation & Push Dispatch
+    setTimeout(async () => {
+      try {
+        const res = await api.runTestSimulation('pat-1', 'Metformin 500mg');
+        if (res && res.success) {
+          setTestResultMsg('🚨 Stage 4 Complete: Escalated to Caregiver Dashboard, Push Notification & Care Timeline!');
+          fetchDiagnostics();
+        }
+      } catch (e) {
+        setTestResultMsg(`Simulation backend notice: ${e.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, 10500);
   };
 
   return (

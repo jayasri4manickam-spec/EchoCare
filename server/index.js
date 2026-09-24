@@ -29,7 +29,7 @@ const app = express();
 
 // Security Middlewares
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: '*', credentials: true }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 // Initialize Database & Background Scheduler
@@ -84,9 +84,24 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Catch-all API 404 Handler - Guarantees JSON response for all /api requests
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({
+      success: false,
+      error: `API endpoint '${req.originalUrl}' not found`,
+    });
+  }
+  next();
+});
+
+// Production Static Serving Fallback (if built frontend exists in dist)
+const distPath = path.join(__dirname, '../dist');
+app.use(express.static(distPath));
+
 // Start Server
 const server = app.listen(config.port, () => {
-  console.log(`🚀 EchoCare Server running on http://localhost:${config.port}`);
+  console.log(`🚀 EchoCare Server running on port ${config.port}`);
 });
 
 export { app, server };

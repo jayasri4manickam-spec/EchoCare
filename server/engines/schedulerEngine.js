@@ -9,17 +9,29 @@ const alarmStagesMap = new Map(); // `${medId}_${dateStr}` -> { stage: 1..4, las
  */
 function parseTimeString(timeStr) {
   if (!timeStr) return null;
-  const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!match) return null;
+  const cleanStr = String(timeStr).replace(/[\u202F\u00A0]/g, ' ').trim();
+  const match = cleanStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (match) {
+    let hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const period = match[3].toUpperCase();
 
-  let hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2], 10);
-  const period = match[3].toUpperCase();
+    if (period === 'PM' && hours < 12) hours += 12;
+    if (period === 'AM' && hours === 12) hours = 0;
 
-  if (period === 'PM' && hours < 12) hours += 12;
-  if (period === 'AM' && hours === 12) hours = 0;
+    return { hours, minutes };
+  }
 
-  return { hours, minutes };
+  const h24Match = cleanStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (h24Match) {
+    const hours = parseInt(h24Match[1], 10);
+    const minutes = parseInt(h24Match[2], 10);
+    if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+      return { hours, minutes };
+    }
+  }
+
+  return null;
 }
 
 export function evaluateMedicationSchedules() {

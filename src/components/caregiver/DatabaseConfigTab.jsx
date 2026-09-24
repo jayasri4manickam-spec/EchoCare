@@ -11,8 +11,7 @@ export const DatabaseConfigTab = () => {
   const fetchStatus = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:5001/api/db/status');
-      const json = await res.json();
+      const json = await api.getDbStatus();
       if (json && json.success) {
         setDbInfo(json.data);
       }

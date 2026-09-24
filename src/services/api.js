@@ -1,4 +1,10 @@
-const API_BASE_URL = 'http://localhost:5001/api';
+const envApiUrl = typeof import.meta !== 'undefined' && import.meta?.env ? import.meta.env.VITE_API_BASE_URL : undefined;
+
+export const API_BASE_URL =
+  envApiUrl ||
+  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    ? '/api'
+    : 'http://localhost:5001/api');
 
 async function fetchApi(endpoint, options = {}) {
   try {
@@ -15,9 +21,27 @@ async function fetchApi(endpoint, options = {}) {
       headers,
     });
 
-    const data = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      try {
+        data = JSON.parse(text);
+      } catch (jsonErr) {
+        console.warn(`[API Notice] Endpoint ${endpoint} returned non-JSON payload (HTTP ${response.status}):`, text.substring(0, 150));
+        return {
+          success: false,
+          status: response.status,
+          error: `Backend server at ${API_BASE_URL} returned non-JSON HTTP ${response.status}. Please ensure backend server is running.`,
+        };
+      }
+    }
+
     if (!response.ok) {
-      console.warn(`API call ${endpoint} returned status ${response.status}:`, data.error);
+      console.warn(`API call ${endpoint} returned status ${response.status}:`, data?.error);
     }
     return data;
   } catch (err) {
@@ -58,12 +82,25 @@ export const api = {
   // Caregivers
   getCaregivers: (patientId = 'pat-1') => fetchApi(`/caregivers?patientId=${patientId}`),
   addCaregiver: (data) => fetchApi('/caregivers', { method: 'POST', body: JSON.stringify(data) }),
+  registerFcmDevice: (caregiverId, token, platform = 'web') =>
+    fetchApi('/caregivers/register-device', {
+      method: 'POST',
+      body: JSON.stringify({
+        caregiverId: caregiverId || 'cg-1',
+        token,
+        fcmToken: token,
+        platform: platform || 'web',
+        deviceInfo: typeof platform === 'string' && platform.includes('Browser') ? platform : `${platform} browser`,
+      }),
+    }),
 
   // Notifications & Acknowledgement
   getNotifications: (patientId = 'pat-1') => fetchApi(`/notifications?patientId=${patientId}`),
   acknowledgeNotification: (id, acknowledgedBy = 'Caregiver User') =>
     fetchApi(`/notifications/${id}/acknowledge`, { method: 'POST', body: JSON.stringify({ acknowledgedBy }) }),
   testAlert: (data) => fetchApi('/notifications/test-alert', { method: 'POST', body: JSON.stringify(data) }),
+  sendTestFcmNotification: (caregiverId = 'cg-1', fcmToken = null) =>
+    fetchApi('/notifications/test-fcm', { method: 'POST', body: JSON.stringify({ caregiverId, fcmToken }) }),
 
   // Caregiver Observations
   getObservations: (patientId = 'pat-1') => fetchApi(`/observations?patientId=${patientId}`),
@@ -80,6 +117,9 @@ export const api = {
 
   // Audit Logs
   getAuditLogs: () => fetchApi('/audit-logs'),
+
+  // Database Status
+  getDbStatus: () => fetchApi('/db/status'),
 
   // Real-Time Event Stream Listener
   subscribeEventStream: (onEvent) => {

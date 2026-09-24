@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Sparkles, TrendingUp, AlertTriangle, ShieldCheck, Activity, Users, Pill, Calendar, HelpCircle } from 'lucide-react';
 import { generateAICareSummary } from '../../services/orchestrator';
 import { getCaregivers, getMedications, getLongitudinalTimeline, subscribeToStorage } from '../../services/storage';
+import { CaregiverNotificationCenter } from './CaregiverNotificationCenter';
 
 export const CaregiverOverviewTab = () => {
   const [summary, setSummary] = useState(generateAICareSummary());
@@ -53,6 +54,9 @@ export const CaregiverOverviewTab = () => {
           </h4>
         </div>
       </div>
+
+      {/* Firebase Cloud Messaging (FCM) Push System Panel */}
+      <CaregiverNotificationCenter caregiverId="cg-1" />
 
       {/* AI Care Summary: "What changed recently?" */}
       <div className="bg-slate-900 border-2 border-slate-800 p-6 sm:p-8 rounded-3xl space-y-6 shadow-xl">
@@ -132,7 +136,7 @@ export const CaregiverOverviewTab = () => {
               <strong className="text-white">08:00 PM:</strong> Medication Metformin (500 mg) was scheduled.<br />
               <strong className="text-white">08:00 PM:</strong> First proactive voice reminder was issued by Echo.<br />
               <strong className="text-white">08:10 PM:</strong> No confirmation received after 10 minutes. Second reminder issued.<br />
-              <strong className="text-white">08:15 PM:</strong> No confirmation received after 5 more minutes. Primary Caregiver alert dispatched via WhatsApp/SMS.<br />
+              <strong className="text-white">08:15 PM:</strong> No confirmation received after 5 more minutes. Primary Caregiver alert dispatched via Push/SMS.<br />
               <strong className="text-white">08:18 PM:</strong> Caregiver acknowledged alert. Active escalation stopped.
             </p>
           </div>

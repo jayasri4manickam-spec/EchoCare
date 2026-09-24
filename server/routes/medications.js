@@ -122,6 +122,15 @@ router.post('/test-simulation', async (req, res) => {
   const timeNowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const dateStr = new Date().toISOString().split('T')[0];
 
+  const medId = 'med-test';
+  const existingMed = db.prepare('SELECT id FROM medications WHERE id = ?').get(medId);
+  if (!existingMed) {
+    db.prepare(`
+      INSERT INTO medications (id, patient_id, name, dosage, unit, instructions, scheduled_time, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(medId, patientId, medicationName, '500', 'mg', 'Test Simulation Medication', timeNowStr, 'Pending');
+  }
+
   const evtId = 'med-evt-test-' + Date.now();
   const eventKey = `${patientId}_test_${dateStr}_${Date.now()}`;
 
@@ -129,7 +138,7 @@ router.post('/test-simulation', async (req, res) => {
   db.prepare(`
     INSERT INTO medication_events (id, medication_id, patient_id, scheduled_date, scheduled_time, event_key, scheduled_for, state, reminder_1_sent_at, final_status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'REMINDER_1_SENT', ?, 'REMINDER_1_SENT')
-  `).run(evtId, 'med-test', patientId, dateStr, timeNowStr, eventKey, timeNowStr, timeNowStr);
+  `).run(evtId, medId, patientId, dateStr, timeNowStr, eventKey, timeNowStr, timeNowStr);
 
   broadcastSystemEvent('PROACTIVE_REMINDER', {
     patientId,

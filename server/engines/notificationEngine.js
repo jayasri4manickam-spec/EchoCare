@@ -1,3 +1,6 @@
+import { initializeApp as initAdminApp, cert, getApps as getAdminApps } from 'firebase-admin/app';
+import { getMessaging as getAdminMessaging } from 'firebase-admin/messaging';
+import fs from 'fs';
 import { db } from '../db/database.js';
 import { config } from '../config.js';
 
@@ -126,29 +129,131 @@ export class SMSProvider {
   }
 }
 
+let firebaseAdminApp = null;
+
+function getFirebaseAdmin() {
+  if (firebaseAdminApp) return firebaseAdminApp;
+  try {
+    const apps = getAdminApps();
+    const serviceAccountPath = config.serviceAccountPath;
+    if (serviceAccountPath && fs.existsSync(serviceAccountPath)) {
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+      if (apps.length === 0) {
+        firebaseAdminApp = initAdminApp({
+          credential: cert(serviceAccount),
+        });
+      } else {
+        firebaseAdminApp = apps[0];
+      }
+      console.log('✅ Firebase Admin SDK initialized using serviceAccountKey.json file.');
+      return firebaseAdminApp;
+    }
+
+    const { projectId, clientEmail, privateKey } = config.firebase;
+    if (clientEmail && privateKey) {
+      if (apps.length === 0) {
+        firebaseAdminApp = initAdminApp({
+          credential: cert({
+            projectId,
+            clientEmail,
+            privateKey,
+          }),
+        });
+      } else {
+        firebaseAdminApp = apps[0];
+      }
+      console.log('✅ Firebase Admin SDK initialized for FCM push notifications.');
+      return firebaseAdminApp;
+    } else {
+      if (apps.length === 0) {
+        firebaseAdminApp = initAdminApp({ projectId });
+      } else {
+        firebaseAdminApp = apps[0];
+      }
+      return firebaseAdminApp;
+    }
+  } catch (err) {
+    console.warn('[PushProvider] Firebase Admin init notice:', err.message);
+    return null;
+  }
+}
+
 export class PushProvider {
-  async send(deviceSubscription, messageText) {
-    if (!deviceSubscription) {
+  async send(fcmToken, options = {}) {
+    const { title = 'EchoCare Caregiver Alert', message = 'New alert', notificationId, priority = 'NORMAL' } =
+      typeof options === 'string' ? { message: options } : options;
+
+    if (!fcmToken) {
       return {
         success: false,
-        status: 'FAILED',
-        error: 'No registered push subscription device target',
-        provider: 'PushProvider',
+        status: 'UNREGISTERED_TOKEN',
+        error: 'No registered FCM device token for caregiver.',
+        provider: 'FirebaseFCM',
       };
     }
-    // Simulation / Web Push delivery
+
+    try {
+      const adminApp = getFirebaseAdmin();
+      if (adminApp) {
+        const messagePayload = {
+          token: fcmToken,
+          notification: {
+            title,
+            body: message,
+          },
+          data: {
+            notificationId: notificationId || ('notif-' + Date.now()),
+            click_action: 'FLUTTER_NOTIFICATION_CLICK',
+            timestamp: new Date().toISOString(),
+          },
+          webpush: {
+            headers: {
+              Urgency: priority === 'CRITICAL' ? 'high' : 'normal',
+            },
+            notification: {
+              title,
+              body: message,
+              icon: '/favicon.svg',
+              badge: '/favicon.svg',
+              requireInteraction: priority === 'CRITICAL',
+            },
+          },
+        };
+
+        const messaging = getAdminMessaging(adminApp);
+        const response = await messaging.send(messagePayload);
+        return {
+          success: true,
+          status: 'DELIVERED',
+          providerMessageId: response,
+          provider: 'FirebaseFCM',
+          responsePayload: JSON.stringify({ messageId: response }),
+        };
+      }
+    } catch (err) {
+      console.error('[PushProvider] FCM push send failed:', err.message);
+      const isExpired = err.code === 'messaging/registration-token-not-registered' || err.message.includes('not-registered');
+      return {
+        success: false,
+        status: isExpired ? 'EXPIRED_TOKEN' : 'FAILED',
+        error: `FCM Send Error: ${err.message}`,
+        provider: 'FirebaseFCM',
+        responsePayload: JSON.stringify({ code: err.code, message: err.message }),
+      };
+    }
+
     return {
-      success: true,
-      status: 'DELIVERED',
-      providerMessageId: 'push-' + Date.now(),
-      provider: 'PushProvider',
+      success: false,
+      status: 'NOT_CONFIGURED',
+      error: 'Firebase Admin SDK service account key (FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY) not set in server environment',
+      provider: 'FirebaseFCM (Unconfigured)',
     };
   }
 }
 
 /**
  * Main Notification Engine Service
- * Implements Fallback Chain: WhatsApp -> SMS -> Dashboard Alert
+ * Implements Fallback Chain: FCM Web Push -> WhatsApp -> SMS -> Dashboard Alert
  */
 export class NotificationService {
   constructor() {
@@ -162,7 +267,7 @@ export class NotificationService {
     
     // Fetch Caregiver Profile
     const caregiver = db.prepare('SELECT * FROM caregivers WHERE id = ?').get(caregiverId) ||
-                      db.prepare('SELECT * FROM caregivers WHERE patient_id = ? AND role = "primary"').get(patientId);
+                      db.prepare("SELECT * FROM caregivers WHERE patient_id = ? AND role = 'primary'").get(patientId);
 
     const recipientPhone = caregiver ? caregiver.phone_number : '+18005550199';
     const caregiverName = caregiver ? caregiver.name : 'Primary Caregiver';
@@ -176,32 +281,42 @@ export class NotificationService {
     const deliveryLogs = [];
     let finalStatus = 'FAILED';
     let primarySuccess = false;
+    let attemptCount = 1;
 
-    // 2. Attempt WhatsApp Delivery First
-    const waResult = await this.whatsAppProvider.send(recipientPhone, message);
-    
-    db.prepare(`
-      INSERT INTO notification_deliveries (id, notification_id, channel, provider, attempt_number, status, response_payload, error_message)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'del-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6) + '-wa',
-      notificationId,
-      'WHATSAPP',
-      waResult.provider,
-      1,
-      waResult.status,
-      waResult.responsePayload || null,
-      waResult.error || null
-    );
+    // 2. Attempt FCM Push Delivery First if caregiver has registered FCM device token
+    if (caregiver && caregiver.fcm_token) {
+      const pushResult = await this.pushProvider.send(caregiver.fcm_token, {
+        title: `EchoCare: ${eventType.replace(/_/g, ' ')}`,
+        message,
+        notificationId,
+        priority,
+      });
 
-    if (waResult.success) {
-      primarySuccess = true;
-      finalStatus = waResult.status;
-      deliveryLogs.push(`WhatsApp delivered to ${caregiverName} (${recipientPhone}).`);
-    } else {
-      deliveryLogs.push(`WhatsApp delivery failed (${waResult.error}). Initiating SMS fallback...`);
+      db.prepare(`
+        INSERT INTO notification_deliveries (id, notification_id, channel, provider, attempt_number, status, response_payload, error_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'del-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6) + '-fcm',
+        notificationId,
+        'PUSH',
+        pushResult.provider,
+        attemptCount++,
+        pushResult.status,
+        pushResult.responsePayload || null,
+        pushResult.error || null
+      );
 
-      // 3. Fallback to SMS Provider
+      if (pushResult.success) {
+        primarySuccess = true;
+        finalStatus = pushResult.status;
+        deliveryLogs.push(`Firebase FCM Push delivered to ${caregiverName}'s registered device.`);
+      } else {
+        deliveryLogs.push(`Firebase FCM Push attempt (${pushResult.error}). Continuing to SMS fallback...`);
+      }
+    }
+
+    // 3. Fallback to SMS Provider
+    if (!primarySuccess) {
       const smsResult = await this.smsProvider.send(recipientPhone, message);
       
       db.prepare(`
@@ -212,7 +327,7 @@ export class NotificationService {
         notificationId,
         'SMS',
         smsResult.provider,
-        2,
+        attemptCount++,
         smsResult.status,
         smsResult.responsePayload || null,
         smsResult.error || null
@@ -220,10 +335,10 @@ export class NotificationService {
 
       if (smsResult.success) {
         primarySuccess = true;
-        finalStatus = smsResult.status;
+        if (finalStatus === 'FAILED') finalStatus = smsResult.status;
         deliveryLogs.push(`SMS fallback delivered to ${caregiverName} (${recipientPhone}).`);
       } else {
-        deliveryLogs.push(`SMS delivery failed (${smsResult.error}). All external channels failed! Critical alert raised on Caregiver Dashboard.`);
+        deliveryLogs.push(`SMS delivery failed (${smsResult.error}). All external channels failed! Alert logged on Caregiver Dashboard.`);
         finalStatus = 'FAILED';
       }
     }

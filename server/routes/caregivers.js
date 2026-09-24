@@ -48,4 +48,80 @@ router.post('/', (req, res) => {
   res.json({ success: true, caregiver: newCaregiver });
 });
 
+// POST /api/caregivers/register-device
+router.post('/register-device', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+
+  const token = req.body.token || req.body.fcmToken;
+  const caregiverId = req.body.caregiverId || req.body.caregiver_id || 'cg-1';
+  const platform = req.body.platform || req.body.deviceInfo || 'web';
+
+  if (!token) {
+    return res.status(400).json({
+      success: false,
+      error: 'FCM registration token is required',
+    });
+  }
+
+  const caregiver =
+    db.prepare('SELECT * FROM caregivers WHERE id = ?').get(caregiverId) ||
+    db.prepare('SELECT * FROM caregivers WHERE role = "primary" LIMIT 1').get() ||
+    db.prepare('SELECT * FROM caregivers LIMIT 1').get();
+
+  if (!caregiver) {
+    return res.status(404).json({
+      success: false,
+      error: 'Caregiver profile not found',
+      caregiverId,
+    });
+  }
+
+  // Idempotent Check: If token is already active for this caregiver, return success immediately
+  if (caregiver.fcm_token === token && caregiver.push_enabled === 1) {
+    return res.json({
+      success: true,
+      message: 'Device registered successfully',
+      caregiverId: caregiver.id,
+      caregiverName: caregiver.name,
+      token,
+      platform,
+      alreadyRegistered: true,
+    });
+  }
+
+  db.prepare(`
+    UPDATE caregivers
+    SET fcm_token = ?, push_enabled = 1
+    WHERE id = ?
+  `).run(token, caregiver.id);
+
+  // Log timeline audit entry
+  const dateStr = new Date().toISOString().split('T')[0];
+  const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  db.prepare(`
+    INSERT INTO timeline_events (id, patient_id, timestamp, date_str, category, title, detail, source, icon)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'tl-fcm-' + Date.now(),
+    caregiver.patient_id,
+    timeStr,
+    dateStr,
+    'Safety',
+    'Caregiver Push Notification Enabled',
+    `Caregiver ${caregiver.name} registered browser device for FCM push alerts (${platform}).`,
+    'Caregiver Action',
+    'Bell'
+  );
+
+  return res.json({
+    success: true,
+    message: 'Device registered successfully',
+    caregiverId: caregiver.id,
+    caregiverName: caregiver.name,
+    token,
+    platform,
+  });
+});
+
 export default router;

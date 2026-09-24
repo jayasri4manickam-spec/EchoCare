@@ -199,6 +199,9 @@ export function initDatabase() {
     addColumnIfMissing('medication_events', 'completed_at', 'TEXT');
     addColumnIfMissing('medication_events', 'final_status', 'TEXT DEFAULT "SCHEDULED"');
 
+    addColumnIfMissing('caregivers', 'fcm_token', 'TEXT');
+    addColumnIfMissing('caregivers', 'push_enabled', 'INTEGER DEFAULT 0');
+
     // 11. Memories Table
     db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
