@@ -186,7 +186,37 @@ export const speak = (text, langCode = null, onEndCallback = null) => {
 
   console.log(`🔊 [Echo Voice Engine] Speaking response out loud [${selectedLang}]:`, text);
 
-  // ALWAYS stream high-definition MP3 Audio via Web Audio API for 100% audible sound output!
+  // 1. Prioritize Native Browser SpeechSynthesis for 100% instant, serverless, offline voice speech on any device!
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = selectedLang;
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+
+      const voice = selectVoiceForLanguage(selectedLang);
+      if (voice) {
+        utterance.voice = voice;
+      }
+
+      utterance.onstart = () => setState('SPEAKING');
+      utterance.onend = () => {
+        setState('IDLE');
+        if (onEndCallback) onEndCallback();
+      };
+      utterance.onerror = (e) => {
+        console.warn('[SpeechSynthesis Notice] Native voice playback notice, trying MP3 fallback...', e);
+        playFallbackAudioSpeech(text, selectedLang, onEndCallback);
+      };
+
+      window.speechSynthesis.speak(utterance);
+      return;
+    } catch (err) {
+      console.warn('[SpeechSynthesis Exception] Falling back to MP3 stream', err);
+    }
+  }
+
+  // 2. Fallback to server MP3 stream if SpeechSynthesis is unavailable
   playFallbackAudioSpeech(text, selectedLang, onEndCallback);
 };
 

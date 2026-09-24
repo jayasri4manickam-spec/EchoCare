@@ -1,3 +1,5 @@
+import { processPatientVoiceInput } from './orchestrator.js';
+
 const envApiUrl = typeof import.meta !== 'undefined' && import.meta?.env ? import.meta.env.VITE_API_BASE_URL : undefined;
 
 export const API_BASE_URL =
@@ -60,9 +62,28 @@ export const api = {
   updatePatient: (id, data) => fetchApi(`/patients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   getMemoryGraph: (patientId = 'pat-1') => fetchApi(`/memories/graph?patientId=${patientId}`),
 
-  // Echo Voice Orchestration
-  sendEchoMessage: (text, language = 'en-IN', patientId = 'pat-1') =>
-    fetchApi('/echo/message', { method: 'POST', body: JSON.stringify({ patientId, text, language }) }),
+  // Echo Voice Orchestration with Client-Side Fallback for Static Deployments
+  sendEchoMessage: async (text, language = 'en-IN', patientId = 'pat-1') => {
+    try {
+      const res = await fetchApi('/echo/message', { method: 'POST', body: JSON.stringify({ patientId, text, language }) });
+      if (res && res.success && res.response) {
+        return res;
+      }
+    } catch (err) {
+      console.warn('Backend echo/message offline, using browser orchestrator fallback:', err.message);
+    }
+
+    // Client-side Orchestrator Fallback
+    const localRes = processPatientVoiceInput(text);
+    return {
+      success: true,
+      text,
+      response: localRes.replyText,
+      intent: localRes.intent,
+      actionableOffer: localRes.actionableOffer,
+      source: 'Browser Local Orchestrator',
+    };
+  },
 
   // Medications
   getMedications: (patientId = 'pat-1') => fetchApi(`/medications?patientId=${patientId}`),
